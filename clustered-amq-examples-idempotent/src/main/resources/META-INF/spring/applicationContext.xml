@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:jdbc="http://www.springframework.org/schema/jdbc"
+       xmlns:camel="http://camel.apache.org/schema/spring"
+       xmlns:activemq="http://activemq.apache.org/schema/core"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+                           http://www.springframework.org/schema/jdbc http://www.springframework.org/schema/jdbc/spring-jdbc-3.0.xsd
+                           http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd
+                           http://activemq.apache.org/schema/core http://activemq.apache.org/schema/core/activemq-core.xsd">
+
+  <jdbc:embedded-database id="dataSource" type="DERBY">
+    <jdbc:script location="classpath:init.sql"/>
+  </jdbc:embedded-database>
+  
+  <broker brokerName="broker1" persistent="false" useJmx="false" xmlns="http://activemq.apache.org/schema/core">
+    <transportConnectors>
+      <transportConnector id="openwire1" uri="tcp://localhost:61626"/>
+      <transportConnector id="vm1" uri="vm://broker1"/>
+    </transportConnectors>
+    <proxyConnectors>
+      <proxyConnector bind="tcp://localhost:61616" remote="fanout:(static:(vm://broker1,tcp://localhost:61627))?fanOutQueues=true&amp;minAckCount=2"/>
+    </proxyConnectors>
+  </broker>
+  
+  <broker brokerName="broker2" persistent="false" useJmx="false" xmlns="http://activemq.apache.org/schema/core">
+    <transportConnectors>
+      <transportConnector id="openwire2" uri="tcp://localhost:61627"/>
+      <transportConnector id="vm2" uri="vm://broker2"/>
+    </transportConnectors>
+    <proxyConnectors>
+      <proxyConnector bind="tcp://localhost:61617" remote="fanout:(static:(vm://broker2,tcp://localhost:61626))?fanOutQueues=true&amp;minAckCount=2"/>
+    </proxyConnectors>
+  </broker>
+  
+  <bean id="amq1" class="org.apache.activemq.camel.component.ActiveMQComponent">
+    <property name="brokerURL" value="tcp://localhost:61626"/>
+  </bean>
+
+  <bean id="amq2" class="org.apache.activemq.camel.component.ActiveMQComponent">
+    <property name="brokerURL" value="tcp://localhost:61627"/>
+  </bean>
+  
+  <!-- Use an IdempotentRepository that can span JVMs (ie, InfinispanIdempotentRepository). -->
+  <bean id="idempotentRepository" class="org.apache.camel.processor.idempotent.MemoryIdempotentRepository"/>
+  
+  <camelContext id="camelContext" trace="false" xmlns="http://camel.apache.org/schema/spring">
+    
+    <restConfiguration component="jetty" host="localhost" port="8080" bindingMode="json"/>
+    <rest id="restDbAccessor" path="/rest">
+      <get uri="/record/{UniqueMessageID}">
+        <route>
+          <log message="I got a request for MessageID: ${headers[UniqueMessageID]}"/>
+          <to uri="sql:select dup_id, message from messages where dup_id = :#${headers[UniqueMessageID]}?dataSource=dataSource"/>
+        </route>
+      </get>
+    </rest>
+
+    <route id="amq1Consumer">
+      <from uri="amq1:queue:org.jboss.examples.MessageQueue?disableReplyTo=true"/>
+      <idempotentConsumer skipDuplicate="true" messageIdRepositoryRef="idempotentRepository">
+        <header>UniqueMessageID</header>
+        <log message="Received Message ID: '${headers[UniqueMessageID]}', Broker: '1', Body: '${body}'"/>
+        <to uri="sql:insert into messages (dup_id, message) values (:#${headers[UniqueMessageID]}, :#${body})?dataSource=dataSource"/>
+      </idempotentConsumer>
+    </route>
+
+    <route id="amq2Consumer">
+      <from uri="amq2:queue:org.jboss.examples.MessageQueue?disableReplyTo=true"/>
+      <idempotentConsumer skipDuplicate="true" messageIdRepositoryRef="idempotentRepository">
+        <header>UniqueMessageID</header>
+        <log message="Received Message ID: '${headers[UniqueMessageID]}', Broker: '2', Body: '${body}'"/>
+        <to uri="sql:insert into messages (dup_id, message) values (:#${headers[UniqueMessageID]}, :#${body})?dataSource=dataSource"/>
+      </idempotentConsumer>
+    </route>
+    
+  </camelContext>
+
+</beans>
