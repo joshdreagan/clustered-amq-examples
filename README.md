@@ -1,15 +1,16 @@
-Camel Router Spring Project
-===========================
+#Clustered ActiveMQ Examples
 
-To build this project use
+Example strategies for handling duplicate messages in a fanout configuration.
 
-    mvn install
+##Requirements
 
-To run this project with Maven use
+- [Apache Maven 3.x](http://maven.apache.org)
 
-    mvn camel:run
+##Building Example
 
-For more help see the Apache Camel documentation
+Run the Maven build
 
-    http://camel.apache.org/
-
+```
+$ cd $PROJECT_ROOT
+$ mvn clean install
+```
